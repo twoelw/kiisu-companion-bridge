@@ -88,6 +88,9 @@ enum {
 // Worst-case first COMMIT may include multi-page flash erase on the aux MCU;
 // allow generous time to avoid false timeouts on slower chips.
 #define COMMIT_TIMEOUT_MS 5000
+// Finalization takes longer (can verify, relocate, and restart the aux MCU)
+// The overlay already warns that this can take up to 1–2 minutes.
+#define FINALIZE_TIMEOUT_MS 120000
 
 typedef struct {
 	Gui* gui;
@@ -451,9 +454,9 @@ static bool perform_update(App* app, const char* filepath, FuriString* out_msg) 
 			}
 		}
 		// Poll status to READY, handle ERROR immediately and verify programming by reading back RX_LEN + ROLL_CRC32
-		uint8_t st = 0xFF; uint8_t prev_st = 0xFE; uint8_t err = 0;
-		uint32_t polls = COMMIT_TIMEOUT_MS / 5; // 5ms steps
-		uint32_t steps_since_commit = 0; bool recommit_once = false;
+	uint8_t st = 0xFF; uint8_t prev_st = 0xFE; uint8_t err = 0;
+	uint32_t polls = COMMIT_TIMEOUT_MS / 5; // 5ms steps
+	uint32_t steps_since_commit = 0;
 		uint32_t consec_read_fail = 0;
 		do {
 			if(!updater_read_u8(&furi_hal_i2c_handle_power, REG_STATUS, &st)) {
@@ -470,13 +473,6 @@ static bool perform_update(App* app, const char* filepath, FuriString* out_msg) 
 				else if(st == ST_ERROR) klog(app, "STATUS=ERROR");
 				else klog(app, "STATUS=0x%02X", st);
 				prev_st = st;
-			}
-			// Re-issue commit once if READY persists immediately (transient race)
-			if(!recommit_once && st == ST_READY && steps_since_commit >= 20) {
-				klog(app, "READY persists ~100ms after COMMIT, reissuing once");
-				(void)updater_cmd(&furi_hal_i2c_handle_power, CMD_COMMIT_CHUNK);
-				recommit_once = true;
-				prev_st = 0xFE;
 			}
 			if(st == ST_READY) break;
 			if(st == ST_ERROR) {
@@ -552,31 +548,45 @@ static bool perform_update(App* app, const char* filepath, FuriString* out_msg) 
 	klog(app, "ERROR: FINALIZE failed");
 		goto release_bus;
 	}
-	// Wait for the aux to complete FINALIZE; accept either STATUS=READY or DONE flag.
+	// Do not write REG_GO; aux will autonomously jump/shutdown after finalize
+	// Wait for the aux to complete FINALIZE; accept STATUS=READY, DONE flag, or device disappearance (aux reboot)
 	{
-		klog(app, "Polling STATUS/DONE after FINALIZE...");
-		uint8_t st = 0xFF; uint8_t prev_st = 0xFE; uint32_t polls = COMMIT_TIMEOUT_MS / 5; // 5ms steps
-		bool done_seen = false;
+		klog(app, "Polling STATUS/DONE after FINALIZE (up to %u ms)...", (unsigned)FINALIZE_TIMEOUT_MS);
+		uint8_t st = 0xFF; uint8_t prev_st = 0xFE; uint32_t polls = FINALIZE_TIMEOUT_MS / 20; // 20ms steps
+		bool done_seen = false; uint32_t not_ready_count = 0;
 		do {
-			// Read STATUS first (best-effort)
-			if(updater_read_u8(&furi_hal_i2c_handle_power, REG_STATUS, &st)) {
-				if(st != prev_st) {
-					if(st == ST_BUSY) klog(app, "STATUS=BUSY");
-					else if(st == ST_READY) klog(app, "STATUS=READY");
-					else if(st == ST_ERROR) klog(app, "STATUS=ERROR");
-					else klog(app, "STATUS=0x%02X", st);
-					prev_st = st;
+			// Check if device still responds on the bus
+			if(!furi_hal_i2c_is_device_ready(&furi_hal_i2c_handle_power, KIISU_UPD_ADDR, READY_TIMEOUT_MS)) {
+				not_ready_count++;
+				if((not_ready_count % 25) == 0) klog(app, "Device not responding during finalize (likely rebooting)...");
+				// Consider disappearance after finalize as success signal (aux rebooted)
+				if(not_ready_count > 50) { // ~1s of absence
+					klog(app, "Device disappeared after finalize; treating as success");
+					done_seen = true;
+					break;
 				}
-				if(st == ST_READY || st == ST_ERROR) break;
+			} else {
+				not_ready_count = 0;
+				// Read STATUS best-effort
+				if(updater_read_u8(&furi_hal_i2c_handle_power, REG_STATUS, &st)) {
+					if(st != prev_st) {
+						if(st == ST_BUSY) klog(app, "STATUS=BUSY");
+						else if(st == ST_READY) klog(app, "STATUS=READY");
+						else if(st == ST_ERROR) klog(app, "STATUS=ERROR");
+						else klog(app, "STATUS=0x%02X", st);
+						prev_st = st;
+					}
+					if(st == ST_READY || st == ST_ERROR) break;
+				}
+				// Also poll DONE flag; if asserted, treat as success path and break out
+				uint8_t flags = 0;
+				if(i2c_read_mem_retry(&furi_hal_i2c_handle_power, KIISU_UPD_ADDR, REG_EVENT_FLAGS, &flags, 1, OP_TIMEOUT_MS)) {
+					if(flags & EVT_DONE_MASK) { done_seen = true; break; }
+				}
 			}
-			// Also poll DONE flag; if asserted, treat as success path and break out
-			uint8_t flags = 0;
-			if(i2c_read_mem_retry(&furi_hal_i2c_handle_power, KIISU_UPD_ADDR, REG_EVENT_FLAGS, &flags, 1, OP_TIMEOUT_MS)) {
-				if(flags & EVT_DONE_MASK) { done_seen = true; break; }
-			}
-			furi_delay_ms(5);
+			furi_delay_ms(20);
 		} while(--polls);
-	if(!(st == ST_READY || done_seen)) {
+		if(!(st == ST_READY || done_seen)) {
 			uint8_t err_fin = 0xFF; uint8_t dbg_calc[2] = {0}, dbg_host[2] = {0}; uint8_t dbg_reset[4] = {0};
 			updater_read_u8(&furi_hal_i2c_handle_power, REG_ERROR, &err_fin);
 			i2c_read_mem_retry(&furi_hal_i2c_handle_power, KIISU_UPD_ADDR, REG_DBG_CRC16_CALC, dbg_calc, 2, OP_TIMEOUT_MS);
@@ -585,18 +595,18 @@ static bool perform_update(App* app, const char* filepath, FuriString* out_msg) 
 			uint16_t calc = (uint16_t)(dbg_calc[0] | ((uint16_t)dbg_calc[1] << 8));
 			uint16_t host = (uint16_t)(dbg_host[0] | ((uint16_t)dbg_host[1] << 8));
 			uint32_t staged_reset = (uint32_t)bit_lib_bytes_to_num_le(dbg_reset, 4);
-			klog(app, "FINALIZE failed: STATUS=0x%02X ERROR=0x%02X DBG calc=0x%04X host=0x%04X staged_reset=0x%08lX",
+			klog(app, "FINALIZE timeout: STATUS=0x%02X ERROR=0x%02X DBG calc=0x%04X host=0x%04X staged_reset=0x%08lX",
 				st, err_fin, calc, host, (unsigned long)staged_reset);
-			furi_string_set(out_msg, "Finalize failed on aux");
+			furi_string_set(out_msg, "Finalize timeout on aux");
 			goto release_bus;
 		}
-	if(st == ST_READY) klog(app, "FINALIZE completed: STATUS=READY");
-	else klog(app, "FINALIZE completed: DONE asserted");
+		if(st == ST_READY) klog(app, "FINALIZE completed: STATUS=READY");
+		else klog(app, "FINALIZE completed: DONE asserted or reboot detected");
 
-	// Play a success notification and give it a moment before aux powers off
-	if(app->notifications) notification_message(app->notifications, &sequence_success);
-	furi_delay_ms(2000);
-	// Aux will self-shutdown ~2s after success; no more host actions needed here
+		// Play a success notification and give it a moment before aux powers off/reboots
+		if(app->notifications) notification_message(app->notifications, &sequence_success);
+		furi_delay_ms(2000);
+		// Aux may self-shutdown shortly after success; no more host actions needed here
 	}
 
 	furi_string_printf(out_msg, "Flashed %lu bytes. CRC32=0x%08lX", (unsigned long)total_len, (unsigned long)rolling_crc32);
