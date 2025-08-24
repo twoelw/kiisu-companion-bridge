@@ -858,21 +858,32 @@ static void overlay_draw(Canvas* canvas, void* ctx) {
 
 	// Layer 1
 	canvas_set_font(canvas, FontPrimary);
-	canvas_draw_str(canvas, 24, 9, "!!  FLASHING  !!");
+	canvas_draw_str(canvas, 23, 9, "!!! FLASHING !!!");
 
-	// Layer 2
+	// Layer 5 copy
 	canvas_set_font(canvas, FontSecondary);
-	canvas_draw_str(canvas, 15, 18, "This might take 1-2 min");
+	canvas_draw_str(canvas, 7, 28, "Unplug and replug if you see");
 
-	// Layer 3
-	canvas_set_font(canvas, FontPrimary);
-	canvas_draw_str(canvas, 1, 39, "Unplug and replug AFTER");
+	// Layer 5 copy
+	canvas_draw_str(canvas, 10, 48, "Disconnect and reconnect");
 
-	// Layer 4
-	canvas_draw_str(canvas, 25, 51, "green led blinks");
+	// Layer 5 copy
+	canvas_draw_str(canvas, 27, 56, "battery if you only");
+
+	// Layer 5 copy
+	canvas_draw_str(canvas, 26, 37, "green LED flashing");
 
 	// Layer 5
-	canvas_draw_line(canvas, 0, 21, 127, 21);
+	canvas_draw_str(canvas, 15, 17, "This might take 2-3min");
+
+	// Layer 5 copy
+	canvas_draw_str(canvas, 25, 64, "hear success sound");
+
+	// Layer 8
+	canvas_draw_line(canvas, 0, 19, 127, 19);
+
+	// Layer 9
+	canvas_draw_line(canvas, 0, 39, 127, 39);
 }
 
 static void overlay_enter(void* ctx) {
