@@ -2,7 +2,7 @@
 
 <img src="./Screenshot.png" align="right" width="320" />
 
-## Flash your Kiisu safely and with ease. No need for soldering and a lot of checksum checks.
+## Flash your Kiisu's companion MCU safely and with ease. No need for soldering and a lot of checksum checks.
 
 ### WARNING
 The risk of a failed flash bricking your Kiisu is very low, but never zero.
@@ -28,4 +28,5 @@ Recovery is always possible via USB DFU or ST‑LINK, but may require soldering 
 - Finalize failed: try again; if persistent, flash with USB or ST-LINK to recover
 
 - Flashing takes longer than 5 minutes: unplug and replug battery and try to boot. If it does not boot, recover with USB or ST-LINK
+
 
