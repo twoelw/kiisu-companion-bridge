@@ -8,6 +8,8 @@
 The risk of a failed flash bricking your Kiisu is very low, but never zero.
 Recovery is always possible via USB DFU or ST‑LINK, but may require soldering or a special adapter.
 
+### CURRENTLY ONLY SUPPORTED WITH THE LATEST [ENHANCED-KIISU4-FW](https://github.com/twoelw/enhanced-kiisu4-fw/releases)
+
 ### Requirements
 - Kiisu hardware with a compatible aux updater listening at I2C 0x30
 - USB power plugged in (device must be charging)
@@ -26,3 +28,4 @@ Recovery is always possible via USB DFU or ST‑LINK, but may require soldering 
 - Finalize failed: try again; if persistent, flash with USB or ST-LINK to recover
 
 - Flashing takes longer than 5 minutes: unplug and replug battery and try to boot. If it does not boot, recover with USB or ST-LINK
+
